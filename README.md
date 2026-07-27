@@ -1,140 +1,89 @@
-# Digital Shadow Test WIP
+# Weather Machine — Digital Shadow Data Pipeline
 
-WeatherMachine was a Digital Shadow architecture that synchronized a Python-based environmental data pipeline with an interactive Unreal Engine 5 visualization. It simulates a professional IoT ecosystem by bridging a time-series SQLite database to a 3D environment using a custom-built, state-locked JSON middleware.
+## Project Status
 
-It is currently being re-written into a networked version.
+This project is **complete and running in production**. The original local Python prototype has been superseded by a networked C#/.NET Azure implementation, which has been live and continuously collecting weather data since [DATE].
 
-## .NET Transition
-The local prototype, described below, is currently being revised to exist over the network.
+The project is not under active feature development — it served its purpose as a hands-on learning project for C#/.NET on Azure, built on top of an existing Python/Unreal prototype. Visual effects in the Unreal client are intentionally minimal (the focus was the data pipeline and client-server architecture, not the visualization layer).
 
-- db -> Azure hosted SQL
-- FrontEnd -> Unreal
-- Diagnostic View -> Static React Page
-- Data Orchestrator -> .NET Azure Functions (AF)
+## Overview
 
-## Orchestration
-.NET functions allow Unreal to receive data from the db
-- Unreal has 2 cached structs 1. Live 2. Historic
-- AF wakes on timer to pull the API data from OpenWeather every x amount of time
-- AF pushes this data to the Unreal client regardless of what Unreal is doing
-- Unreal can request specific ID's for historic data from AF, and AF does not need to keep track of state 
+WeatherMachine is a "digital shadow" system that synchronizes real-world environmental data with a live 3D visualization in Unreal Engine 5. It pulls live weather data on a schedule, stores it, and serves it to a networked Unreal client that renders it as an interactive environment.
 
-# Local Prototype
+The project went through two architectures as requirements clarified:
 
-## Local Technical Architecture
-The system is designed as a multi-process pipeline to ensure data integrity and system stability:
+1. A **local Python prototype**, using a file-based JSON middleware layer to bridge a script-driven data pipeline to Unreal Engine on the same machine.
+2. A **networked C#/.NET production version**, once the local prototype validated the core data model and the requirements simplified enough to move to a proper client-server design over Azure.
 
-- **Data Injection** A Python-based "Pulse" script that simulates complex environmental telemetry (Temp, Wind, Solar Alpha) and logs them to a time-series SQLite database.
+Both are documented below for completeness.
 
-- **The Bridge (Middleware)** A robust Python service utilizing watchdog to monitor file-system events. It handles the "handshake" between Unreal Engine and the Database.
+---
 
-- **State Management** Implements a bi-directional "JSON Handshake" to manage Live vs. Historical data states, ensuring no data loss during scrubbing.
+## Production Architecture (C#/.NET on Azure)
 
-- **Visualization** An Unreal Engine 5 dashboard that translates raw integers and floats into visceral environmental effects (lighting, cloud density, and wind physics).
+The current, running implementation. Two Azure Functions and a networked Unreal Engine 5 C++ client.
 
-## Key Features
+### Components
 
-- **Concurrency & Robust I/O**
-To handle the "Race Condition" where multiple scripts read/write the same file, I implemented a Retry-with-Delay logic. This ensures that OS-level file locking doesn't crash the pipeline, providing 99.9% uptime during high-speed data injection.
+- **`FetchLatestWeatherData`** — Timer-triggered Azure Function (hourly). Pulls live data from the OpenWeather API, transforms it into domain data (wind vector from speed/degrees, sun-elevation alpha from sunrise/sunset timestamps, ISO time conversion, weather-state classification), and persists it to Azure SQL via EF Core.
+- **`GetWeatherById`** — HTTP-triggered Azure Function. A function-key-authenticated REST GET endpoint that returns either the latest record (no `id` param) or a specific historic record by ID, with `IsLive` computed dynamically based on the request.
+- **Unreal Engine 5 C++ client** — Polls the endpoint on an interval it calculates itself from the server's last timestamp plus update interval, rather than a fixed poll loop. Includes connection-retry handling on failed requests and debounced network requests when a user scrubs through historic data.
 
-- **Atomic Data Transactions**
-The pipeline uses Atomic File Swapping (os.replace). Data is written to a temporary buffer and "swapped" instantly into the production path, preventing Unreal Engine from ever reading a corrupted or partial JSON packet.
+### Key Details
 
-- **Bi-Directional State Locking (WIP)**
-Developed a History-Lock protocol. When a user "scrubs" through time in the Unreal UI:
+- **Dynamic poll scheduling** — the client computes its next expected update time from the server's own timestamp and interval, rather than polling blindly, reducing unnecessary requests.
+- **Debounced historic scrubbing** — rapid input while scrubbing through historic IDs is debounced (200ms) before triggering a network request.
+- **Connection resilience** — failed requests trigger a bounded retry sequence rather than failing silently.
 
-    1. Unreal sets a Desired_ID.
-    2. The Bridge locks the state and fetches the specific database record.
-    3. Unreal confirms the Current_ID matches the Desired_ID before releasing the lock. This allows for a responsive UI without harassing the db
+### Tech Stack
 
-- **Modular Data Normalization**
-Centralized all environmental variables into a unified WeatherPacket dataclass. This supports the "single source of truth" framework.
+- Backend: C#, .NET, Azure Functions, Entity Framework Core, Azure SQL
+- Client: Unreal Engine 5 (C++)
+- Data Source: OpenWeather API
 
-*Currently in Development*
-## Development Roadmap
-- [x] Initial Project Architecture & Repository Setup
-- [x] Python SQLite Ingestion Script
-- [x] Fake Data Injector
-- [x] Unreal Engine Data-Visuallization
-- [x] Design complete visualization goals to understand data requirements
-- [x] Design / Implement Unreal UX for controlling historical data
-- [x] Implement Json handshake for historical data viewing
-- [x] Implement historical data viewing
-- [x] Fix bugs with unreal json controller
-- [x] Refactor Bridge architecture
-- [ ] Implement Health Check Utility
-- [ ] Replace basic curve controllers with cosine/sin based waves
-- [ ] Implement Weather State change
-- [ ] Add Mt. Rainier and other environment details
+---
 
-### Networked Development
-- [ ] Refactor json connection into TCP communication
-- [ ] Server deployment
+## Local Prototype (Python)
 
-## Tech Stack
+The original proof of concept. Validated the core data model and surfaced real concurrency problems before the architecture moved to a networked design.
+
+### Local Technical Architecture
+
+The system was designed as a multi-process pipeline to ensure data integrity and system stability:
+
+- **Data Injection** — A Python "Pulse" script simulating environmental telemetry (temp, wind, solar alpha), logged to a time-series SQLite database.
+- **The Bridge (Middleware)** — A Python service using `watchdog` to monitor file-system events, handling the handshake between Unreal Engine and the database.
+- **State Management** — A bi-directional "JSON Handshake" managing live vs. historical data states.
+- **Visualization** — An Unreal Engine 5 dashboard translating raw values into environmental effects (lighting, cloud density, wind physics).
+
+### Key Features (Prototype-Only)
+
+These solved real problems in the local, single-machine version. They were not carried forward into the networked production version, since the client-server redesign made them unnecessary — noted here as an accurate record of what was built and learned, not as claims about the current system.
+
+- **Concurrency & Robust I/O** — Retry-with-delay logic to handle race conditions from multiple scripts reading/writing the same file.
+- **Atomic Data Transactions** — Atomic file swapping (`os.replace`) so Unreal never read a corrupted or partial JSON packet.
+- **Bi-Directional State Locking** — A history-lock protocol so Unreal could scrub through time without desyncing from the database.
+- **Modular Data Normalization** — A unified `WeatherPacket` dataclass as a single source of truth across the pipeline.
+
+### Tech Stack
 
 - Engine: Unreal Engine 5 (Blueprints, Input)
 - Language: Python 3.13 (Dataclasses, Watchdog, SQLite3)
-- Database: SQLite (Time-series optimization)
-- Data Format: JSON (Atomic I/O)
+- Database: SQLite (time-series)
+- Data Format: JSON (atomic I/O)
 
-## Running Locally
+### Running the Local Prototype
 
-WeatherMachine can be run locally with 3 scripts running simultaneously
-1. Bridge.py - connects Unreal to Data
-2. Harvester.py / Injector.py - collects or fabricates data to SQL, respectively
-3. WeatherMachine.uproject - developer frontend
+The local prototype ran as 3 concurrent scripts:
 
-### Unreal
-    Player Right Clicks - Toggles Live / Historic Mode
-        If Live (Paused the simulation)
-            Write to unreal_control.json
-                is_live = False
-                desired_id = (set by unreal but will be the current_id because you just paused)
-        If Paused (Unpause the simulation)
-            Write to unreal_control.json
-                is_live = True
-    Player Scrolls - determines desired_id
-        If Paused
-            Write to unreal_control.json - desired_id
+1. `Bridge.py` — connects Unreal to the data layer
+2. `Harvester.py` / `Injector.py` — collects real or fabricated data
+3. `WeatherMachine.uproject` — Unreal developer frontend
 
-### Bridge
-Operates on Event Handlers
+---
 
-    EVENT (write) unreal_control.json
-        Open json and set global is_live from packet
+## What This Project Demonstrated
 
-        If is_live - global to bridge
-            If live_data is known
-                Send live_data
-            Else
-                get live data from the db via WeatherRepository Class -> 
-        Else
-            fetch desired_id packet and pass to unreal
-
-    EVENT (write) live_weather.json
-        If is_live
-            save live_data to weather_data.json
-
-### Harvester / Injector
-
-    Creates WeatherRepo - controls r/w to db and json
-        dynamic write function for dataclasses
-
-    Creates WeatherEngine
-        WeatherEngine.run_forever(function, interval)
-            Receives parameterized function to run at a set interval
-                harvest() or inject()
-
-    harvest() or inject()
-        harvest requests data from OpenWeather API
-            forms into dataclass
-        injector creates data for testing
-            forms into dataclass
-        both functions then pass packet to WeatherRepo to:
-            insert packet into SQL
-            writes packet to live_weather.json
-
-    
-    
-    
+- Designing and shipping a working client-server architecture from scratch, including a live Azure deployment
+- Identifying when an initial design's complexity (file-based locking, bi-directional handshakes) was solving a problem that a simpler networked architecture didn't have
+- Working across a Python and C#/.NET stack, plus a C++ game engine client, in a single coherent system
